@@ -56,6 +56,11 @@ type Config struct {
 	// MusicPollInterval is how often Music is queried while another app
 	// holds Now Playing.
 	MusicPollInterval time.Duration
+	// PausedCheck is how long Music is queried after Now Playing reports it
+	// paused. Now Playing can miss a resume that quickly follows a pause,
+	// e.g. while skipping tracks, and would show Music paused until the next
+	// change.
+	PausedCheck time.Duration
 }
 
 // DefaultConfig returns the defaults.
@@ -74,6 +79,7 @@ func DefaultConfig() Config {
 		RetryInterval:         5 * time.Second,
 		RestartInterval:       3 * time.Second,
 		MusicPollInterval:     3 * time.Second,
+		PausedCheck:           30 * time.Second,
 	}
 }
 
@@ -114,10 +120,11 @@ type App struct {
 	Log   *slog.Logger
 	Now   func() time.Time // defaults to time.Now
 
-	pollMu   sync.Mutex
-	music    nowplaying.Info // last Music snapshot from Now Playing; zero once Music stopped
-	stopPoll context.CancelFunc
-	pollDone chan struct{}
+	pollMu      sync.Mutex
+	music       nowplaying.Info // last Music snapshot from Now Playing; zero once Music stopped
+	stopPoll    context.CancelFunc
+	pollDone    chan struct{}
+	pollLimited bool // the poller checks a pause and stops after PausedCheck
 
 	mu       sync.Mutex
 	sender   *sender
@@ -164,7 +171,8 @@ func (a *App) Run(ctx context.Context) error {
 // snapshot handles a Now Playing snapshot. While another app, or none, holds
 // Now Playing, Music is polled instead until Now Playing reports it again or
 // it is found stopped; Music may play behind the other app, also when this
-// program starts.
+// program starts. After a pause, Music is polled for PausedCheck to catch a
+// resume that Now Playing missed.
 func (a *App) snapshot(ctx context.Context, info nowplaying.Info) {
 	if a.Music == nil || a.isPlayer(info) {
 		a.stopPolling()
@@ -172,14 +180,45 @@ func (a *App) snapshot(ctx context.Context, info nowplaying.Info) {
 		a.music = info
 		a.pollMu.Unlock()
 		a.update(ctx, info)
+		if a.Music != nil && !info.Playing && a.Config.PausedCheck > 0 {
+			a.startPolling(ctx, a.Config.PausedCheck)
+		}
 		return
 	}
 	a.pollMu.Lock()
+	following := a.stopPoll != nil && !a.pollLimited && !closed(a.pollDone)
+	a.pollMu.Unlock()
+	if !following {
+		a.stopPolling() // a pause check, which would end too soon
+		a.startPolling(ctx, 0)
+	}
+}
+
+// startPolling starts polling Music, for at most limit if it is not 0.
+func (a *App) startPolling(ctx context.Context, limit time.Duration) {
+	a.pollMu.Lock()
 	defer a.pollMu.Unlock()
-	if a.stopPoll == nil {
-		pctx, cancel := context.WithCancel(ctx)
-		a.stopPoll, a.pollDone = cancel, make(chan struct{})
-		go a.poll(ctx, pctx, a.pollDone, a.music.Title != "")
+	var pctx context.Context
+	var cancel context.CancelFunc
+	if limit > 0 {
+		pctx, cancel = context.WithTimeout(ctx, limit)
+	} else {
+		pctx, cancel = context.WithCancel(ctx)
+	}
+	a.stopPoll, a.pollDone, a.pollLimited = cancel, make(chan struct{}), limit > 0
+	go a.poll(ctx, pctx, a.pollDone, limit == 0 && a.music.Title != "")
+}
+
+// closed reports whether c is closed; nil is not.
+func closed(c <-chan struct{}) bool {
+	if c == nil {
+		return false
+	}
+	select {
+	case <-c:
+		return true
+	default:
+		return false
 	}
 }
 

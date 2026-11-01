@@ -644,12 +644,16 @@ func (m *fakeMusic) count() int {
 
 var safari = nowplaying.Info{BundleID: "com.apple.WebKit.GPU", Title: "Lecture", Playing: true, Duration: 2800, Rate: 1}
 
-func musicTestApp(t *testing.T) (*App, chanSource, *fakeMusic, *recorder) {
+func musicTestApp(t *testing.T, opts ...func(*Config)) (*App, chanSource, *fakeMusic, *recorder) {
 	t.Helper()
 	cfg := testSenderConfig()
 	cfg.MinUpdateInterval = 10 * time.Millisecond
 	cfg.MusicPollInterval = 20 * time.Millisecond
+	cfg.PausedCheck = 0 // tests that want it set it
 	src, m, r := make(chanSource), &fakeMusic{}, &recorder{}
+	for _, o := range opts {
+		o(&cfg)
+	}
 	a := &App{Config: cfg, Source: src, Catalog: fakeCatalog{classical: map[string]*metadata.ClassicalTrack{"1": mozart}},
 		Presence: r, Music: m, Log: discardLog}
 	startRun(t, a)
@@ -846,4 +850,41 @@ func TestAPIChangedLoggedOnce(t *testing.T) {
 	if !strings.Contains(logs.String(), "work again") {
 		t.Errorf("recovery not logged:\n%s", logs.String())
 	}
+}
+
+func TestPausedCheckCatchesMissedResume(t *testing.T) {
+	_, src, m, r := musicTestApp(t, func(c *Config) { c.PausedCheck = time.Second })
+	src <- music("1", "Piano Concerto…", true)
+	waitFor(t, r, 1)
+
+	// Now Playing reports a pause and misses the resume that follows.
+	m.set(music("5539924869265790887", "Piano Concerto…", true), nil)
+	src <- music("1", "Piano Concerto…", false)
+	eventually(t, r, "playing again", func(a *discord.Activity) bool {
+		return a != nil && !isPaused(a) && a.Details == mozart.Work+": II. Andante"
+	})
+}
+
+func TestPausedCheckEnds(t *testing.T) {
+	_, src, m, r := musicTestApp(t, func(c *Config) { c.PausedCheck = 60 * time.Millisecond })
+	m.set(music("1", "Piano Concerto…", false), nil)
+	src <- music("1", "Piano Concerto…", false)
+	eventually(t, r, "the paused track", isPaused)
+	time.Sleep(100 * time.Millisecond) // past PausedCheck
+	n := m.count()
+	time.Sleep(100 * time.Millisecond)
+	if m.count() != n {
+		t.Error("Music still polled after PausedCheck")
+	}
+}
+
+func TestOtherAppDuringPausedCheckKeepsFollowing(t *testing.T) {
+	_, src, m, r := musicTestApp(t, func(c *Config) { c.PausedCheck = 60 * time.Millisecond })
+	m.set(music("1", "Piano Concerto…", false), nil)
+	src <- music("1", "Piano Concerto…", false)
+	eventually(t, r, "the paused track", isPaused)
+	src <- safari                                   // takes Now Playing while the pause is checked
+	time.Sleep(150 * time.Millisecond)              // past PausedCheck
+	m.set(music("1", "Piano Concerto…", true), nil) // Music resumes behind Safari
+	eventually(t, r, "Music followed after PausedCheck", func(a *discord.Activity) bool { return a != nil && !isPaused(a) })
 }
