@@ -10,6 +10,12 @@ go vet ./... && go test -race ./...
 
 테스트는 Discord, Apple API, adapter를 가짜로 대체하므로 네트워크나 Discord 없이 돌아갑니다.
 
+커버리지는 아래처럼 확인합니다. README의 커버리지 배지는 `main`에 push할 때마다 CI가 `badges` 브랜치에 갱신합니다.
+
+```sh
+go test -coverprofile=coverage.out ./... && go tool cover -func=coverage.out | tail -1
+```
+
 ## 구조
 
 | 패키지 | 역할 |

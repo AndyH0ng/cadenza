@@ -3,6 +3,7 @@
 # cadenza
 
 [![test](https://github.com/AndyH0ng/cadenza/actions/workflows/test.yml/badge.svg)](https://github.com/AndyH0ng/cadenza/actions/workflows/test.yml)
+![coverage](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/AndyH0ng/cadenza/badges/coverage.json)
 [![release](https://img.shields.io/github/v/release/AndyH0ng/cadenza)](https://github.com/AndyH0ng/cadenza/releases)
 [![license](https://img.shields.io/github/license/AndyH0ng/cadenza)](LICENSE)
 ![platform](https://img.shields.io/badge/platform-macOS-lightgrey)
