@@ -1,0 +1,48 @@
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Build adapter
+        run: |
+          cmake -S third_party/mediaremote-adapter -B third_party/mediaremote-adapter/build -DCMAKE_BUILD_TYPE=Release
+          cmake --build third_party/mediaremote-adapter/build --target MediaRemoteAdapter
+
+      - name: Build cadenza
+        env:
+          CGO_ENABLED: "0"
+        run: |
+          GOARCH=arm64 go build -trimpath -ldflags=-s -o cadenza-arm64 ./cmd/cadenza
+          GOARCH=amd64 go build -trimpath -ldflags=-s -o cadenza-amd64 ./cmd/cadenza
+          lipo -create -output cadenza cadenza-arm64 cadenza-amd64
+
+      - name: Package
+        run: |
+          dir="cadenza-$GITHUB_REF_NAME-macos"
+          adapter="$dir/third_party/mediaremote-adapter"
+          mkdir -p "$adapter/bin" "$adapter/build"
+          cp cadenza README.md LICENSE "$dir/"
+          cp third_party/mediaremote-adapter/LICENSE "$adapter/"
+          cp third_party/mediaremote-adapter/bin/mediaremote-adapter.pl "$adapter/bin/"
+          cp -R third_party/mediaremote-adapter/build/MediaRemoteAdapter.framework "$adapter/build/"
+          ditto -c -k --keepParent "$dir" "$dir.zip"
+
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" --generate-notes "cadenza-$GITHUB_REF_NAME-macos.zip"

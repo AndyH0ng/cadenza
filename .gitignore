@@ -1,0 +1,6 @@
+/cadenza
+.DS_Store
+
+# Full Apple Music Classical crawl; only the sample is checked in.
+/internal/app/testdata/classical_tracks.json
+/internal/app/testdata/classical_titles.golden
